@@ -49,6 +49,9 @@ class DashboardController < ActionController::Base
 
   def set_global_config
     @global_config = GlobalConfig.get(*GLOBAL_CONFIG_KEYS).merge(app_config)
+    # Behind a trusted proxy the default post-logout target (/app/login) would sign the
+    # user straight back in, so logout must land on the proxy's own logout endpoint.
+    @global_config['LOGOUT_REDIRECT_LINK'] = trusted_proxy_logout_redirect_link if trusted_proxy_auth_enabled?
   end
 
   def set_dashboard_scripts
@@ -67,7 +70,7 @@ class DashboardController < ActionController::Base
   def process_trusted_proxy_auth
     return unless request.path == '/app/login'
     return if params[:sso_auth_token].present?
-    return unless GlobalConfigService.load('ENABLE_TRUSTED_PROXY_AUTH', 'false').to_s == 'true'
+    return unless trusted_proxy_auth_enabled?
 
     email = request.headers[trusted_proxy_auth_header]
     return if email.blank?
@@ -78,8 +81,16 @@ class DashboardController < ActionController::Base
     redirect_to "/app/login?email=#{ERB::Util.url_encode(user.email)}&sso_auth_token=#{user.generate_sso_auth_token}"
   end
 
+  def trusted_proxy_auth_enabled?
+    GlobalConfigService.load('ENABLE_TRUSTED_PROXY_AUTH', 'false').to_s == 'true'
+  end
+
   def trusted_proxy_auth_header
     GlobalConfigService.load('TRUSTED_PROXY_AUTH_HEADER', 'Cf-Access-Authenticated-User-Email')
+  end
+
+  def trusted_proxy_logout_redirect_link
+    GlobalConfigService.load('TRUSTED_PROXY_LOGOUT_REDIRECT_LINK', '/cdn-cgi/access/logout')
   end
 
   def render_hc_if_custom_domain
