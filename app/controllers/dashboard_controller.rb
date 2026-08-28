@@ -35,6 +35,7 @@ class DashboardController < ActionController::Base
   around_action :switch_locale
   before_action :ensure_installation_onboarding, only: [:index]
   before_action :render_hc_if_custom_domain, only: [:index]
+  before_action :process_trusted_proxy_auth, only: [:index]
   before_action :ensure_html_format
   layout 'vueapp'
 
@@ -56,6 +57,29 @@ class DashboardController < ActionController::Base
 
   def ensure_installation_onboarding
     redirect_to '/installation/onboarding' if ::Redis::Alfred.get(::Redis::Alfred::CHATWOOT_INSTALLATION_ONBOARDING)
+  end
+
+  # Auto-login for installations running behind a trusted authenticating proxy
+  # (e.g. Cloudflare Access sets Cf-Access-Authenticated-User-Email). The proxy is
+  # trusted to strip client-supplied values for this header, so its presence alone
+  # proves the user's identity; we exchange it for a short-lived SSO auth token that
+  # the login page submits automatically.
+  def process_trusted_proxy_auth
+    return unless request.path == '/app/login'
+    return if params[:sso_auth_token].present?
+    return unless GlobalConfigService.load('ENABLE_TRUSTED_PROXY_AUTH', 'false').to_s == 'true'
+
+    email = request.headers[trusted_proxy_auth_header]
+    return if email.blank?
+
+    user = User.from_email(email.strip)
+    return if user.blank?
+
+    redirect_to "/app/login?email=#{ERB::Util.url_encode(user.email)}&sso_auth_token=#{user.generate_sso_auth_token}"
+  end
+
+  def trusted_proxy_auth_header
+    GlobalConfigService.load('TRUSTED_PROXY_AUTH_HEADER', 'Cf-Access-Authenticated-User-Email')
   end
 
   def render_hc_if_custom_domain
